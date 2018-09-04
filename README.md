@@ -9,3 +9,6 @@ Evaluation: Search world model for best solution, take one real step, repeat
 
 How to find where we are uncertain (further away)? Need a model for proposing valid/possible states?
 Value function but for uncertainty? In what direction are we most uncertain?
+
+
+Idea: Predict probability of switching instead?
