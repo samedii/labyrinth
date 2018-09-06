@@ -1,10 +1,18 @@
 import torch
 import torch.utils.data
 
-class DeterministicMemory:
+class Memory:
+    observations = []
 
-    def __init__(self):
-        self.observations = {}
+    def add(self, ob, action, next_ob, reward, game_over):
+        self.observations.append((ob, action, next_ob, reward, game_over))
+
+    def dataset(self):
+        args = (torch.tensor(x, dtype=torch.float32) for x in zip(*self.observations))
+        return torch.utils.data.TensorDataset(*args)
+
+class DeterministicMemory:
+    observations = {}
 
     def hash(self, ob, action, next_ob, reward, game_over):
         return (

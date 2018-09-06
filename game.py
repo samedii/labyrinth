@@ -25,7 +25,7 @@ class Labyrinth:
             [1, 0, 0, 0],
             [1, 1, 2, 1]
         ], dtype=np.float32)
-        return self.state
+        return self.state.copy()
 
     def step(self, action):
         position = np.where(self.state == self.player)
@@ -34,19 +34,27 @@ class Labyrinth:
         position = tuple(position[i] + self.direction[action][i] for i in range(2))
     
         np_position = np.array(position)
-        game_over = (
+
+        outside_bounds = (
             (np_position <= -1).any() or
-            (np_position >= self.state.shape).any() or
+            (np_position >= self.state.shape).any()
+        )
+
+        if outside_bounds:
+            return self.state, 0.0, 1.0
+
+        win = (self.state[position] == self.goal).any()
+
+        game_over = (
+            win or
             (self.state[position] == self.wall).any()
-        ).astype(np.float32)
+        )
 
         if not game_over:
             self.state[position] = self.player
-            reward = (self.state[position] == self.goal).any().astype(np.float32) # player standing on goal
-        else:
-            reward = 0.0
 
-        return self.state, reward, game_over
+        reward = win.astype(np.float32)
+        return self.state.copy(), reward, game_over.astype(np.float32)
 
 
 class HumanGame:

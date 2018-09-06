@@ -8,40 +8,56 @@ import pyro.distributions as dist
 class Network(nn.Module):
     def __init__(self):
         super(Network, self).__init__()
-        self.conv_start = nn.Conv2d(7, 16, kernel_size=3, stride=1, padding=1)
-        n_pieces = 4
-        board_width = 4
-        board_height = 4
-        channels = 1
-        self.conv_ob = nn.Conv2d(channels, n_pieces*2, kernel_size=3, stride=1, padding=1)
-        self.fc_reward = nn.Linear(channels*board_width*board_height, 2*2)
-        self.fc_game_over = nn.Linear(channels*board_width*board_height, 2*2)
+        self.n_pieces = 4
+        self.n_actions = 4
+        self.board_height = 4
+        self.board_width = 4
+        self.conv_start1 = nn.Conv2d(self.n_pieces + self.n_actions, 32, kernel_size=3, stride=1, padding=1)
+        self.conv_start2 = nn.Conv2d(32, 16, kernel_size=1, stride=1, padding=0)
+
+        channels = 16
+        self.conv_ob1 = nn.Conv2d(channels, 16, kernel_size=1, stride=1, padding=0)
+        self.conv_ob2 = nn.Conv2d(16 + self.n_pieces, self.n_pieces*2, kernel_size=1, stride=1, padding=0)
+
+        self.conv_reward = nn.Conv2d(channels, 8, kernel_size=1, stride=1, padding=0)
+        self.fc_reward = nn.Linear(8*self.board_width*self.board_height, 2*2)
+
+        self.conv_game_over = nn.Conv2d(channels, 8, kernel_size=1, stride=1, padding=0)
+        self.fc_game_over = nn.Linear(8*self.board_width*self.board_height, 2*2)
 
     def forward(self, ob, ac):
         n_obs = ob.shape[0]
-        ob = torch.stack([ob == x for x in range(1, 4)], dim=1).float()
-        ac = torch.stack([ac == x for x in range(4)], dim=1).float()
+        ob = torch.stack([ob == x for x in range(self.n_pieces)], dim=1).float()
+        ac = torch.stack([ac == x for x in range(self.n_actions)], dim=1).float()
 
         x = torch.cat((
-            ob.view(-1, 3, 4, 4),
-            ac.view(-1, 4, 1, 1).repeat((1, 1, 4, 4))
+            ob.view(-1, self.n_pieces, self.board_width, self.board_height),
+            ac.view(-1, self.n_actions, 1, 1).repeat((1, 1, self.board_width, self.board_height))
         ), dim=1)
 
-        x = self.conv_start(x)
-        x, _ = x.max(dim=1, keepdim=True)
+        x = F.relu(self.conv_start1(x))
+        x = self.conv_start2(x)
+        #x, _ = x.max(dim=1, keepdim=True)
         x = F.relu(x)
-        ob_logits = self.conv_ob(x).permute(0, 2, 3, 1) # categorical wants the channel last
-        ob_logits_loc = ob_logits[:, :, :, :4]
-        ob_logits_scale = ob_logits[:, :, :, 4:]
-        x = x.view(n_obs, -1)
-        reward_parms = self.fc_reward(x)
-        reward_parms_loc = reward_parms[:, :2]
-        reward_parms_scale = reward_parms[:, 2:]
-        game_over_logits = self.fc_game_over(x)
+
+        ob_logits = F.relu(self.conv_ob1(x))
+        ob_logits = torch.cat((ob_logits, ob), dim=1)
+        ob_logits = self.conv_ob2(ob_logits)
+        ob_logits = ob_logits.permute(0, 2, 3, 1) # categorical wants the channel last
+        ob_logits_loc = ob_logits[:, :, :, :self.n_pieces]
+        ob_logits_scale = ob_logits[:, :, :, self.n_pieces:]
+
+        reward_logits = F.relu(self.conv_reward(x))
+        reward_logits = self.fc_reward(reward_logits.view(n_obs, -1))
+        reward_logits_loc = reward_logits[:, :2]
+        reward_logits_scale = reward_logits[:, 2:]
+
+        game_over_logits = F.relu(self.conv_game_over(x))
+        game_over_logits = self.fc_game_over(game_over_logits.view(n_obs, -1))
         game_over_logits_loc = game_over_logits[:, :2]
         game_over_logits_scale = game_over_logits[:, 2:]
 
-        return (ob_logits_loc, ob_logits_scale), (reward_parms_loc, reward_parms_scale), (game_over_logits_loc, game_over_logits_scale)
+        return (ob_logits_loc, ob_logits_scale), (reward_logits_loc, reward_logits_scale), (game_over_logits_loc, game_over_logits_scale)
 
 class DreamWorld(nn.Module):
     def __init__(self, cuda=False):
@@ -52,58 +68,73 @@ class DreamWorld(nn.Module):
         if cuda:
             self.cuda()
 
+    def dist(self, ob, ac):
+        # network is only called in guide
+        ob_logits, reward_logits, game_over_logits = self.network(ob, ac)
+
+        # approximating distribution
+        # ob_logits = dist.Normal(
+        #     loc=ob_logits[0],
+        #     scale=F.softplus(ob_logits[1])
+        # ).independent()
+
+        # reward_logits = dist.Normal(
+        #     loc=reward_logits[0],
+        #     scale=F.softplus(reward_logits[1])
+        # ).independent()
+
+        # game_over_logits = dist.Normal(
+        #     loc=game_over_logits[0],
+        #     scale=F.softplus(game_over_logits[1])
+        # ).independent()
+
+        return ob_logits, reward_logits, game_over_logits
+
     def model(self, ob, ac, next_ob, reward, game_over):
         pyro.module('dream_world', self)
 
+        ob_logits, reward_logits, game_over_logits = self.dist(ob, ac)
+        ob_logits, reward_logits, game_over_logits = ob_logits[0], reward_logits[0], game_over_logits[0]
+
         # priors
-        ob_logits = pyro.sample('ob_logits', dist.Normal(
-            loc=torch.zeros(ob.shape + (4,), dtype=torch.float32).cuda(),
-            scale=10*torch.ones(ob.shape + (4,), dtype=torch.float32).cuda()
-        ).independent())
+        # ob_logits = pyro.sample('ob_logits', dist.Normal(
+        #     loc=torch.zeros(ob.shape + (4,), dtype=torch.float32).cuda(),
+        #     scale=10*torch.ones(ob.shape + (4,), dtype=torch.float32).cuda()
+        # ).independent())
 
-        reward_parms = pyro.sample('reward_parms', dist.Normal(
-            loc=torch.zeros(reward.shape + (2,), dtype=torch.float32).cuda(),
-            scale=10*torch.ones(reward.shape + (2,), dtype=torch.float32).cuda()
-        ).independent())
+        # reward_logits = pyro.sample('reward_logits', dist.Normal(
+        #     loc=torch.zeros(reward.shape + (2,), dtype=torch.float32).cuda(),
+        #     scale=10*torch.ones(reward.shape + (2,), dtype=torch.float32).cuda()
+        # ).independent())
 
-        game_over_logits = pyro.sample('game_over_logits', dist.Normal(
-            loc=torch.zeros(game_over.shape + (2,), dtype=torch.float32).cuda(),
-            scale=10*torch.ones(game_over.shape + (2,), dtype=torch.float32).cuda()
-        ).independent())
+        # game_over_logits = pyro.sample('game_over_logits', dist.Normal(
+        #     loc=torch.zeros(game_over.shape + (2,), dtype=torch.float32).cuda(),
+        #     scale=10*torch.ones(game_over.shape + (2,), dtype=torch.float32).cuda()
+        # ).independent())
 
         #with pyro.iarange('observe_data'): # needed?
         pyro.sample('next_ob', dist.Categorical(logits=ob_logits).independent(), obs=next_ob)
-        pyro.sample('reward', dist.Normal(loc=reward_parms[:, 0], scale=F.softplus(reward_parms[:, 1])).independent(), obs=reward)
+        pyro.sample('reward', dist.Categorical(logits=reward_logits).independent(), obs=reward)
         pyro.sample('game_over', dist.Categorical(logits=game_over_logits).independent(), obs=game_over)
 
     def guide(self, ob, ac, next_ob, reward, game_over):
         pyro.module('dream_world', self)
 
         # network is only called in guide
-        ob_logits, reward_parms, game_over_logits = self.network(ob, ac)
+        # ob_logits, reward_logits, game_over_logits = self.dist(ob, ac)
 
         # approximating distribution
-        ob_logits = pyro.sample('ob_logits', dist.Normal(
-            loc=ob_logits[0],
-            scale=F.softplus(ob_logits[1])
-        ).independent())
+        # ob_logits = pyro.sample('ob_logits', ob_logits)
+        # reward_logits = pyro.sample('reward_logits', reward_logits)
+        # game_over_logits = pyro.sample('game_over_logits', game_over_logits)
 
-        reward_parms = pyro.sample('reward_parms', dist.Normal(
-            loc=reward_parms[0],
-            scale=F.softplus(reward_parms[1])
-        ).independent())
-
-        game_over_logits = pyro.sample('game_over_logits', dist.Normal(
-            loc=game_over_logits[0],
-            scale=F.softplus(game_over_logits[1])
-        ).independent())
-
-        return ob_logits, reward_parms, game_over_logits
 
     def sample(self, ob, ac):
-        ob_logits, reward_parms, game_over_logits = self.guide(ob, ac, None, None, None)
+        ob_logits, reward_logits, game_over_logits = self.dist(ob, ac)
+        ob_logits, reward_logits, game_over_logits = ob_logits[0], reward_logits[0], game_over_logits[0]
+        #ob_logits, reward_logits, game_over_logits = ob_logits.sample(), reward_logits.sample(), game_over_logits.sample()
         next_ob = dist.Categorical(logits=ob_logits).sample()
-        reward = dist.Normal(loc=reward_parms[:, 0], scale=F.softplus(reward_parms[:, 1])).sample()
+        reward = dist.Categorical(logits=reward_logits).sample()
         game_over = dist.Categorical(logits=game_over_logits).sample()
         return next_ob, reward, game_over
 
