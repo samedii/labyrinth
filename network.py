@@ -59,6 +59,11 @@ class Network(nn.Module):
 
         return (ob_logits_loc, ob_logits_scale), (reward_logits_loc, reward_logits_scale), (game_over_logits_loc, game_over_logits_scale)
 
+class CustomCategorical(dist.Categorical):
+    sample_weight = 1000
+    def log_prob(self, x, *args, **kwargs):
+        return super().log_prob(x, *args, **kwargs)*self.sample_weight
+
 class DreamWorld(nn.Module):
     def __init__(self, cuda=False):
         super(DreamWorld, self).__init__()
@@ -68,74 +73,75 @@ class DreamWorld(nn.Module):
         if cuda:
             self.cuda()
 
-    def dist(self, ob, ac):
+    def guide_dist(self, ob, ac):
         # network is only called in guide
         ob_logits, reward_logits, game_over_logits = self.network(ob, ac)
 
         # approximating distribution
-        # ob_logits = dist.Normal(
-        #     loc=ob_logits[0],
-        #     scale=F.softplus(ob_logits[1])
-        # ).independent()
+        ob_logits = dist.Normal(
+            loc=ob_logits[0],
+            scale=F.softplus(ob_logits[1])
+        ).independent()
 
-        # reward_logits = dist.Normal(
-        #     loc=reward_logits[0],
-        #     scale=F.softplus(reward_logits[1])
-        # ).independent()
+        reward_logits = dist.Normal(
+            loc=reward_logits[0],
+            scale=F.softplus(reward_logits[1])
+        ).independent()
 
-        # game_over_logits = dist.Normal(
-        #     loc=game_over_logits[0],
-        #     scale=F.softplus(game_over_logits[1])
-        # ).independent()
+        game_over_logits = dist.Normal(
+            loc=game_over_logits[0],
+            scale=F.softplus(game_over_logits[1])
+        ).independent()
 
         return ob_logits, reward_logits, game_over_logits
 
     def model(self, ob, ac, next_ob, reward, game_over):
         pyro.module('dream_world', self)
 
-        ob_logits, reward_logits, game_over_logits = self.dist(ob, ac)
-        ob_logits, reward_logits, game_over_logits = ob_logits[0], reward_logits[0], game_over_logits[0]
-
         # priors
-        # ob_logits = pyro.sample('ob_logits', dist.Normal(
-        #     loc=torch.zeros(ob.shape + (4,), dtype=torch.float32).cuda(),
-        #     scale=10*torch.ones(ob.shape + (4,), dtype=torch.float32).cuda()
-        # ).independent())
+        ob_logits = pyro.sample('ob_logits', dist.Normal(
+            loc=torch.zeros(ob.shape + (4,), dtype=torch.float32).cuda(),
+            scale=10*torch.ones(ob.shape + (4,), dtype=torch.float32).cuda()
+        ).independent())
 
-        # reward_logits = pyro.sample('reward_logits', dist.Normal(
-        #     loc=torch.zeros(reward.shape + (2,), dtype=torch.float32).cuda(),
-        #     scale=10*torch.ones(reward.shape + (2,), dtype=torch.float32).cuda()
-        # ).independent())
+        reward_logits = pyro.sample('reward_logits', dist.Normal(
+            loc=torch.zeros(reward.shape + (2,), dtype=torch.float32).cuda(),
+            scale=10*torch.ones(reward.shape + (2,), dtype=torch.float32).cuda()
+        ).independent())
 
-        # game_over_logits = pyro.sample('game_over_logits', dist.Normal(
-        #     loc=torch.zeros(game_over.shape + (2,), dtype=torch.float32).cuda(),
-        #     scale=10*torch.ones(game_over.shape + (2,), dtype=torch.float32).cuda()
-        # ).independent())
+        game_over_logits = pyro.sample('game_over_logits', dist.Normal(
+            loc=torch.zeros(game_over.shape + (2,), dtype=torch.float32).cuda(),
+            scale=10*torch.ones(game_over.shape + (2,), dtype=torch.float32).cuda()
+        ).independent())
 
         #with pyro.iarange('observe_data'): # needed?
-        pyro.sample('next_ob', dist.Categorical(logits=ob_logits).independent(), obs=next_ob)
-        pyro.sample('reward', dist.Categorical(logits=reward_logits).independent(), obs=reward)
-        pyro.sample('game_over', dist.Categorical(logits=game_over_logits).independent(), obs=game_over)
+        pyro.sample('next_ob', CustomCategorical(logits=ob_logits).independent(), obs=next_ob)
+        pyro.sample('reward', CustomCategorical(logits=reward_logits).independent(), obs=reward)
+        pyro.sample('game_over', CustomCategorical(logits=game_over_logits).independent(), obs=game_over)
 
     def guide(self, ob, ac, next_ob, reward, game_over):
         pyro.module('dream_world', self)
 
         # network is only called in guide
-        # ob_logits, reward_logits, game_over_logits = self.dist(ob, ac)
+        ob_logits, reward_logits, game_over_logits = self.guide_dist(ob, ac)
 
         # approximating distribution
-        # ob_logits = pyro.sample('ob_logits', ob_logits)
-        # reward_logits = pyro.sample('reward_logits', reward_logits)
-        # game_over_logits = pyro.sample('game_over_logits', game_over_logits)
+        ob_logits = pyro.sample('ob_logits', ob_logits)
+        reward_logits = pyro.sample('reward_logits', reward_logits)
+        game_over_logits = pyro.sample('game_over_logits', game_over_logits)
 
 
     def sample(self, ob, ac):
-        ob_logits, reward_logits, game_over_logits = self.dist(ob, ac)
-        ob_logits, reward_logits, game_over_logits = ob_logits[0], reward_logits[0], game_over_logits[0]
-        #ob_logits, reward_logits, game_over_logits = ob_logits.sample(), reward_logits.sample(), game_over_logits.sample()
-        next_ob = dist.Categorical(logits=ob_logits).sample()
-        reward = dist.Categorical(logits=reward_logits).sample()
-        game_over = dist.Categorical(logits=game_over_logits).sample()
+        ob_logits, reward_logits, game_over_logits = self.network(ob, ac)
+        print('loc')
+        print(ob_logits[0][0])
+        print('scale')
+        print(ob_logits[1][0])
+        ob_logits, reward_logits, game_over_logits = self.guide_dist(ob, ac)
+        ob_logits, reward_logits, game_over_logits = ob_logits.sample(), reward_logits.sample(), game_over_logits.sample()
+        next_ob = CustomCategorical(logits=ob_logits).sample()
+        reward = CustomCategorical(logits=reward_logits).sample()
+        game_over = CustomCategorical(logits=game_over_logits).sample()
         return next_ob, reward, game_over
 
 

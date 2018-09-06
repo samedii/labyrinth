@@ -16,7 +16,7 @@ cuda = True
 
 env = game.Labyrinth()
 mem = memory.DeterministicMemory()
-#mem = memory.Memory()
+# mem = memory.Memory()
 
 # Gather some data through human actions
 ob = env.reset()
@@ -39,7 +39,7 @@ for i in range(100):
 
 # Gather some data through random actions
 ob = env.reset()
-for i in range(1000):
+for i in range(10000):
     ac = np.random.choice(4)
     next_ob, reward, game_over = env.step(ac)
 
@@ -55,17 +55,6 @@ start_ob = torch.tensor(env.reset()).view(1, 4, 4)
 dream_game = network.DreamGame(dream, start_ob)
 human_game = game.HumanGame(dream_game)
 
-class CustomLoss(pyro.infer.Trace_ELBO):
-    sample_weight = 1000
-    def __init__(self, num_particles=1):
-        super().__init__(num_particles=num_particles)
-
-    def loss(self, model, guide, *args, **kwargs):
-        return super().loss(model, guide, *args, **kwargs)*self.sample_weight
-
-    def loss_and_grads(self, model, guide, *args, **kwargs):
-        return super().loss_and_grads(model, guide, *args, **kwargs)*self.sample_weight
-
 pyro.clear_param_store()
 for _ in range(10):
 
@@ -74,7 +63,7 @@ for _ in range(10):
         dream.model,
         dream.guide,
         optim=pyro.optim.Adam({'lr': 0.005, 'betas': (0.95, 0.999)}),
-        loss=CustomLoss(num_particles=10)
+        loss=pyro.infer.Trace_ELBO(num_particles=1)
     )
 
     ds = mem.dataset()
@@ -82,7 +71,8 @@ for _ in range(10):
     data_loader = torch.utils.data.DataLoader(ds, batch_size=5, pin_memory=cuda)
 
     losses = []
-    for epoch in range(1, 10):
+    for epoch in range(1, 50+1):
+        print('epoch: {}'.format(epoch))
         for i, (ob, ac, next_ob, reward, game_over) in enumerate(data_loader):
             ob, ac, next_ob, reward, game_over = ob.cuda(), ac.cuda(), next_ob.cuda(), reward.cuda(), game_over.cuda()
             loss = svi.step(ob, ac, next_ob, reward, game_over)
