@@ -23,5 +23,9 @@ Loop back to start position (value function for start position) if game over
 
 Use memory if we have observed something before
 
+Adding dropout or noise to a normal network would also give a measure of the uncertainty? Could work 
+very well when the problem is deterministic?
 
+Idea: If we do distance to memory we have an easier time knowing if this is far from something we have seen before?
 
+VI might be fitting to our observed but also overfitting what we have not seen...

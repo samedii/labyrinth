@@ -40,12 +40,12 @@ class Network(nn.Module):
         #x, _ = x.max(dim=1, keepdim=True)
         x = F.relu(x)
 
-        ob_logits = F.relu(self.conv_ob1(x))
-        ob_logits = torch.cat((ob_logits, ob), dim=1)
-        ob_logits = self.conv_ob2(ob_logits)
-        ob_logits = ob_logits.permute(0, 2, 3, 1) # categorical wants the channel last
-        ob_logits_loc = ob_logits[:, :, :, :self.n_pieces]
-        ob_logits_scale = ob_logits[:, :, :, self.n_pieces:]
+        next_ob_logits = F.relu(self.conv_ob1(x))
+        next_ob_logits = torch.cat((next_ob_logits, ob), dim=1)
+        next_ob_logits = self.conv_ob2(next_ob_logits)
+        next_ob_logits = next_ob_logits.permute(0, 2, 3, 1) # categorical wants the channel last
+        next_ob_logits_loc = next_ob_logits[:, :, :, :self.n_pieces]
+        next_ob_logits_scale = next_ob_logits[:, :, :, self.n_pieces:]
 
         reward_logits = F.relu(self.conv_reward(x))
         reward_logits = self.fc_reward(reward_logits.view(n_obs, -1))
@@ -57,7 +57,7 @@ class Network(nn.Module):
         game_over_logits_loc = game_over_logits[:, :2]
         game_over_logits_scale = game_over_logits[:, 2:]
 
-        return (ob_logits_loc, ob_logits_scale), (reward_logits_loc, reward_logits_scale), (game_over_logits_loc, game_over_logits_scale)
+        return (next_ob_logits_loc, next_ob_logits_scale), (reward_logits_loc, reward_logits_scale), (game_over_logits_loc, game_over_logits_scale)
 
 class CustomCategorical(dist.Categorical):
     sample_weight = 1000
@@ -75,12 +75,12 @@ class DreamWorld(nn.Module):
 
     def guide_dist(self, ob, ac):
         # network is only called in guide
-        ob_logits, reward_logits, game_over_logits = self.network(ob, ac)
+        next_ob_logits, reward_logits, game_over_logits = self.network(ob, ac)
 
         # approximating distribution
-        ob_logits = dist.Normal(
-            loc=ob_logits[0],
-            scale=F.softplus(ob_logits[1])
+        next_ob_logits = dist.Normal(
+            loc=next_ob_logits[0],
+            scale=F.softplus(next_ob_logits[1])
         ).independent()
 
         reward_logits = dist.Normal(
@@ -93,13 +93,13 @@ class DreamWorld(nn.Module):
             scale=F.softplus(game_over_logits[1])
         ).independent()
 
-        return ob_logits, reward_logits, game_over_logits
+        return next_ob_logits, reward_logits, game_over_logits
 
     def model(self, ob, ac, next_ob, reward, game_over):
         pyro.module('dream_world', self)
 
         # priors
-        ob_logits = pyro.sample('ob_logits', dist.Normal(
+        next_ob_logits = pyro.sample('next_ob_logits', dist.Normal(
             loc=torch.zeros(ob.shape + (4,), dtype=torch.float32).cuda(),
             scale=10*torch.ones(ob.shape + (4,), dtype=torch.float32).cuda()
         ).independent())
@@ -115,7 +115,7 @@ class DreamWorld(nn.Module):
         ).independent())
 
         #with pyro.iarange('observe_data'): # needed?
-        pyro.sample('next_ob', CustomCategorical(logits=ob_logits).independent(), obs=next_ob)
+        pyro.sample('next_ob', CustomCategorical(logits=next_ob_logits).independent(), obs=next_ob)
         pyro.sample('reward', CustomCategorical(logits=reward_logits).independent(), obs=reward)
         pyro.sample('game_over', CustomCategorical(logits=game_over_logits).independent(), obs=game_over)
 
@@ -123,23 +123,23 @@ class DreamWorld(nn.Module):
         pyro.module('dream_world', self)
 
         # network is only called in guide
-        ob_logits, reward_logits, game_over_logits = self.guide_dist(ob, ac)
+        next_ob_logits, reward_logits, game_over_logits = self.guide_dist(ob, ac)
 
         # approximating distribution
-        ob_logits = pyro.sample('ob_logits', ob_logits)
+        next_ob_logits = pyro.sample('next_ob_logits', next_ob_logits)
         reward_logits = pyro.sample('reward_logits', reward_logits)
         game_over_logits = pyro.sample('game_over_logits', game_over_logits)
 
 
     def sample(self, ob, ac):
-        ob_logits, reward_logits, game_over_logits = self.network(ob, ac)
+        next_ob_logits, reward_logits, game_over_logits = self.network(ob, ac)
         print('loc')
-        print(ob_logits[0][0])
+        print(next_ob_logits[0][0])
         print('scale')
-        print(ob_logits[1][0])
-        ob_logits, reward_logits, game_over_logits = self.guide_dist(ob, ac)
-        ob_logits, reward_logits, game_over_logits = ob_logits.sample(), reward_logits.sample(), game_over_logits.sample()
-        next_ob = CustomCategorical(logits=ob_logits).sample()
+        print(next_ob_logits[1][0])
+        next_ob_logits, reward_logits, game_over_logits = self.guide_dist(ob, ac)
+        next_ob_logits, reward_logits, game_over_logits = next_ob_logits.sample(), reward_logits.sample(), game_over_logits.sample()
+        next_ob = CustomCategorical(logits=next_ob_logits).sample()
         reward = CustomCategorical(logits=reward_logits).sample()
         game_over = CustomCategorical(logits=game_over_logits).sample()
         return next_ob, reward, game_over
