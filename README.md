@@ -29,3 +29,11 @@ very well when the problem is deterministic?
 Idea: If we do distance to memory we have an easier time knowing if this is far from something we have seen before?
 
 VI might be fitting to our observed but also overfitting what we have not seen...
+
+How do we get someplace? We can use our world model? How? We can backprop to find the actions we need to take to get from A to B in N steps. We can build a model that predicts the minimum number of steps between two states?
+
+We can remember how go get to each state that we have seen?
+
+Note: After we have created a dream world we now have accesss to a differentiable world model(!) Only seems to work with RelaxedOneHotCategorical
+
+Q-learning to find best path?

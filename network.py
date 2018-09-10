@@ -132,11 +132,6 @@ class DreamWorld(nn.Module):
 
 
     def sample(self, ob, ac):
-        next_ob_logits, reward_logits, game_over_logits = self.network(ob, ac)
-        print('loc')
-        print(next_ob_logits[0][0])
-        print('scale')
-        print(next_ob_logits[1][0])
         next_ob_logits, reward_logits, game_over_logits = self.guide_dist(ob, ac)
         next_ob_logits, reward_logits, game_over_logits = next_ob_logits.sample(), reward_logits.sample(), game_over_logits.sample()
         next_ob = CustomCategorical(logits=next_ob_logits).sample()
@@ -144,11 +139,25 @@ class DreamWorld(nn.Module):
         game_over = CustomCategorical(logits=game_over_logits).sample()
         return next_ob, reward, game_over
 
+    def model_uncertainty(self, ob, ac, n_samples=100):
+        # alternative f-divergences https://en.wikipedia.org/wiki/F-divergence
+        guide_dist = self.guide_dist(ob, ac)
+        n_obs = ob.shape[0]
+        kl = torch.zeros(n_obs).cuda()
+        for guide in guide_dist:
+            probs = dist.Categorical(logits=guide.sample((n_samples,))).probs
+            index = torch.meshgrid((torch.arange(n_samples), torch.arange(n_samples)))
+            probs_p = probs[index[0]]
+            probs_q = probs[index[1]]
+            kl_point = probs_q*torch.log(probs_q/(probs_p + 1e-6))
+            kl += kl_point.sum(-1).view(n_samples*n_samples, n_obs, -1).mean(0).sum(1)
+        return kl
 
 class DreamGame():
-    def __init__(self, dream, ob):
+    def __init__(self, dream, ob, memory=None):
         self.start_ob = torch.tensor(ob).view(1, 4, 4).cuda() # hack
         self.dream = dream
+        self.memory = memory
 
     def reset(self):
         self.ob = self.start_ob
@@ -158,6 +167,5 @@ class DreamGame():
         ac = torch.tensor([ac]).cuda() # hack
         self.ob, reward, game_over = self.dream.sample(self.ob, ac)
         return self.ob[0], reward[0], game_over[0]
-
 
         

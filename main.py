@@ -3,7 +3,6 @@ import torch
 import pyro
 import pyro.distributions as dist
 import pyro.optim
-import pyro.infer.mcmc
 import matplotlib.pyplot as plt
 
 pyro.enable_validation(True)
@@ -77,34 +76,70 @@ for _ in range(10):
             loss = svi.step(*(x.cuda() for x in batch))
             losses.append(loss)
 
-    plt.plot(losses)
-    plt.show()
+    # plt.plot(losses)
+    # plt.show()
 
     # human_game.play()
 
-    # Get uncertainty of each action
-    ob, ac, next_ob, reward, game_over = (x.cuda() for x in ds[:])
-    guide_dist = dream.guide_dist(ob, ac) # TODO: insert more actions, and possibly more ob based on world model?
+    # Simulate new moves
+    ob, _, next_ob, _, game_over = (x.cuda() for x in ds[:])
+    n_actions = 4
+    for _ in range(10):
+        next_ob = next_ob[game_over == 0]
+        ob = torch.cat((ob, next_ob.float()), dim=0)
+        ob = torch.stack(tuple({str(x): x for x in ob}.values()), dim=0) # remove duplicates
 
-    n_obs = len(ds)
-    n_dists = 100
-    kl = torch.zeros(n_obs).cuda()
-    for guide in guide_dist:
-        probs = dist.Categorical(logits=guide.sample((n_dists,))).probs
-        index = torch.meshgrid((torch.arange(n_dists), torch.arange(n_dists)))
-        probs_p = probs[index[0]]
-        probs_q = probs[index[1]]
-        kl_point = probs_q*torch.log(probs_q/(probs_p + 1e-6))
-        kl += kl_point.sum(-1).view(n_dists*n_dists, n_obs, -1).mean(0).sum(1)
-        # alternative f-divergences https://en.wikipedia.org/wiki/F-divergence
-    print(kl)
+        ac = torch.arange(n_actions).float().cuda()
+        ac = ac.view(1, n_actions).repeat(ob.shape[0], 1).view(-1)
+        ob = ob.view(-1, 1, 4, 4).repeat(1, n_actions, 1, 1).view(-1, 4, 4)
+
+        next_ob, _, game_over = dream.sample(ob, ac)
+
+        # optimization: save in a dict and do not recalculate stuff
+
+    # Q-learning of model uncertainty
+    unique_ob = torch.stack(tuple({str(x): x for x in ob}.values()), dim=0) # remove duplicates
+    ob_lookup = {str(x): index for index, x in enumerate(unique_ob)}
+
+    # Get uncertainty of each action and connections
+    # Could repeat this step to handle uncertainty of transitions better
+    kl = dream.model_uncertainty(ob, ac, n_samples=10).view(-1, n_actions)
+    index = -torch.ones((len(ob_lookup), 4)).cuda()
+    point_index = [(next_ob == x.long()).all(-1).all(-1).view(-1, n_actions) for x in unique_ob]
+    game_over = game_over
+    for i, x in enumerate(point_index):
+        # there is probably a better way of doing this
+        # TODO: check index, it might be wrong?
+        index[x] = torch.where(game_over.view(-1, 4)[x] == 1, torch.tensor(-1.0).cuda(), torch.tensor(i).float().cuda())
+        kl[x] = torch.where(game_over.view(-1, 4)[x] == 1, torch.tensor(0.0).cuda(), kl[x])
+    index = torch.cat((index, -torch.ones((1, 4)).cuda()), dim=0).long()
+    kl = torch.cat((kl, torch.zeros((1, 4)).cuda()), dim=0)
+    print('kl', kl)
+    print('index', index)
+
+    # Propagate uncertainty values backwards to get the discounted sum
+    learning_rate = 0.5
+    discount_factor = 0.9
+    value_kl = kl
+    for _ in range(100):
+        connection_value = value_kl[index]
+        max_connection_value, _ = connection_value.max(dim=1)
+        value_kl = (1 - learning_rate)*value_kl + learning_rate*(kl + discount_factor*max_connection_value)
+    print('value_kl', value_kl)
+
+    # Alternative search methods:
+    #   Breadth first search
+    #   Depth first monte carlo (ineffective?)
+    #   Optimization (needs relaxation of categorical?)
+
+    # TODO:
+    # Vectorized dream world with uncertainty as a reward
+    # Monte carlo that shit
+    # Follow best monte carlo to get more data
 
     # Learn value function with kl as reward
 
+    # Find N actions that give the highest uncertainty just through backprop?
+
     # Gather more data
     # todo
-
-    # tensor([0.0151, 0.0486, 0.0162, 0.0668, 0.0550, 0.0151, 0.0235, 0.0306, 0.0304,
-    #     0.0190, 0.0678, 0.0467, 0.0336, 0.0192, 0.0275, 0.0131, 0.0232, 0.0483,
-    #     0.0660, 0.0136, 0.0468, 0.0319, 0.0267, 0.0225, 0.0161, 0.0086, 0.0206,
-    #     0.0365, 0.0580], device='cuda:0')
