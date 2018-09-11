@@ -55,7 +55,7 @@ dream_game = network.DreamGame(dream, start_ob)
 human_game = game.HumanGame(dream_game)
 
 pyro.clear_param_store()
-for _ in range(10):
+for _ in range(100):
 
     # Learn
     svi = pyro.infer.SVI(
@@ -70,7 +70,7 @@ for _ in range(10):
     data_loader = torch.utils.data.DataLoader(ds, batch_size=5, pin_memory=cuda)
 
     losses = []
-    for epoch in range(1, 50+1):
+    for epoch in range(1, 100+1):
         print('epoch: {}'.format(epoch))
         for i, batch in enumerate(data_loader):
             loss = svi.step(*(x.cuda() for x in batch))
@@ -103,19 +103,22 @@ for _ in range(10):
 
     # Get uncertainty of each action and connections
     # Could repeat this step to handle uncertainty of transitions better
+    next_ob = next_ob.view(-1, n_actions, next_ob.shape[1], next_ob.shape[2])
+    game_over = game_over.view(-1, 4)
     kl = dream.model_uncertainty(ob, ac, n_samples=10).view(-1, n_actions)
     index = -torch.ones((len(ob_lookup), 4)).cuda()
-    point_index = [(next_ob == x.long()).all(-1).all(-1).view(-1, n_actions) for x in unique_ob]
-    game_over = game_over
-    for i, x in enumerate(point_index):
+    for i, x in enumerate(unique_ob):
         # there is probably a better way of doing this
         # TODO: check index, it might be wrong?
-        index[x] = torch.where(game_over.view(-1, 4)[x] == 1, torch.tensor(-1.0).cuda(), torch.tensor(i).float().cuda())
-        kl[x] = torch.where(game_over.view(-1, 4)[x] == 1, torch.tensor(0.0).cuda(), kl[x])
+        point_index = (next_ob == x.long()).all(-1).all(-1)
+        index[point_index] = torch.where(game_over[point_index] == 1, torch.tensor(0.0).cuda(), torch.tensor(i).float().cuda()) # KL go back to start
+        #kl[point_index] = torch.where(game_over[point_index] == 1, torch.tensor(0.0).cuda(), kl[point_index])
     index = torch.cat((index, -torch.ones((1, 4)).cuda()), dim=0).long()
     kl = torch.cat((kl, torch.zeros((1, 4)).cuda()), dim=0)
     print('kl', kl)
     print('index', index)
+
+    # TODO: set KL to zero if we already have that observation?
 
     # Propagate uncertainty values backwards to get the discounted sum
     learning_rate = 0.5
@@ -132,14 +135,27 @@ for _ in range(10):
     #   Depth first monte carlo (ineffective?)
     #   Optimization (needs relaxation of categorical?)
 
-    # TODO:
-    # Vectorized dream world with uncertainty as a reward
-    # Monte carlo that shit
-    # Follow best monte carlo to get more data
+    # Gather data
+    ob = env.reset()
+    for i in range(10):
+        print('ob', ob)
+        key = str(torch.from_numpy(ob).cuda())
+        if key in ob_lookup:
+            i = ob_lookup[key]
+            ac = value_kl[i].argmax().item()
+            print('ac', ac, 'value_kl[i]', value_kl[i])
+        else:
+            ac = np.random.choice(4)
+            print('random action, ac', ac)
 
-    # Learn value function with kl as reward
+        next_ob, reward, game_over = env.step(ac)
+        mem.add(ob, ac, next_ob, reward, game_over)
 
-    # Find N actions that give the highest uncertainty just through backprop?
+        if game_over:
+            ob = env.reset()
+        else:
+            ob = next_ob
 
-    # Gather more data
-    # todo
+
+
+
