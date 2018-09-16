@@ -37,3 +37,12 @@ We can remember how go get to each state that we have seen?
 Note: After we have created a dream world we now have accesss to a differentiable world model(!) Only seems to work with RelaxedOneHotCategorical
 
 Q-learning to find best path?
+
+Idea: Train on samples from previous model (but give them low sample weight?). Basically add dreamed up samples to dataset
+
+GAN? Is this a real labyrinth?
+
+We need to have the uncertainty earlier (i.e. the uncertainty of the relationship)
+
+
+
