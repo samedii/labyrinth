@@ -3,6 +3,7 @@ import torch
 import pyro
 import pyro.distributions as dist
 import pyro.optim
+import pyro.contrib.autoguide
 import matplotlib.pyplot as plt
 
 pyro.enable_validation(True)
@@ -51,6 +52,7 @@ for i in range(100):
         ob = next_ob
 
 dream = network.DreamWorld(cuda)
+dream.cuda()
 start_ob = torch.tensor(env.reset()).view(1, 4, 4)
 dream_game = network.DreamGame(dream, start_ob)
 human_game = game.HumanGame(dream_game)
@@ -62,7 +64,7 @@ for _ in range(100):
     svi = pyro.infer.SVI(
         dream.model,
         dream.guide,
-        optim=pyro.optim.Adam({'lr': 0.001, 'betas': (0.95, 0.999)}),
+        optim=pyro.optim.Adam({'lr': 0.002, 'betas': (0.95, 0.999)}),
         loss=pyro.infer.Trace_ELBO(num_particles=1)
     )
 
@@ -72,11 +74,12 @@ for _ in range(100):
 
     losses = []
     for epoch in range(1, 100+1):
-        # print('epoch: {}'.format(epoch))
         for i, batch in enumerate(data_loader):
             loss = svi.step(*(x.cuda() for x in batch))
             losses.append(loss)
+        #print('epoch: {}, loss: {}'.format(epoch, loss))
 
+    print('loss: {}'.format(loss))
     # plt.plot(losses)
     # plt.show()
 
@@ -85,7 +88,7 @@ for _ in range(100):
     # Simulate new moves
     ob, _, next_ob, _, game_over = (x.cuda() for x in ds[:])
     n_actions = 4
-    for _ in range(10):
+    for _ in range(1):
         next_ob = next_ob[game_over == 0]
         ob = torch.cat((ob, next_ob.float()), dim=0)
         ob = torch.stack(tuple({str(x): x for x in ob}.values()), dim=0) # remove duplicates
@@ -98,7 +101,7 @@ for _ in range(100):
 
         # optimization: save in a dict and do not recalculate stuff
 
-    q_learning = search.QLearning(dream, ob, ac, next_ob, game_over, n_samples=20)
+    q_learning = search.QLearning(dream, ob, ac, next_ob, game_over, n_dists=100, n_samples=10)
 
     board, board_value_kl, board_kl = q_learning.directions()
     print('board')

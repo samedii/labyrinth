@@ -44,5 +44,9 @@ GAN? Is this a real labyrinth?
 
 We need to have the uncertainty earlier (i.e. the uncertainty of the relationship)
 
+priors = {'linear.weight': w_prior, 'linear.bias': b_prior}
+lifted_module = pyro.random_module("module", regression_model, priors)
+https://github.com/uber/pyro/blob/dev/examples/bayesian_regression.py
 
+Use autoguide instead and remove uncertainty of final loc, scale
 

@@ -12,10 +12,11 @@ class Network(nn.Module):
         self.n_actions = 4
         self.board_height = 4
         self.board_width = 4
-        self.conv_start1 = nn.Conv2d(self.n_pieces + self.n_actions, 32, kernel_size=3, stride=1, padding=1)
-        self.conv_start2 = nn.Conv2d(32, 16, kernel_size=1, stride=1, padding=0)
 
         channels = 16
+        self.conv_start1 = nn.Conv2d(self.n_pieces + self.n_actions, 32, kernel_size=3, stride=1, padding=1)
+        self.conv_start2 = nn.Conv2d(32, channels, kernel_size=1, stride=1, padding=0)
+
         self.conv_ob1 = nn.Conv2d(channels, 16, kernel_size=1, stride=1, padding=0)
         self.conv_ob2 = nn.Conv2d(16 + self.n_pieces, self.n_pieces*2, kernel_size=1, stride=1, padding=0)
 
@@ -31,13 +32,12 @@ class Network(nn.Module):
         ac = torch.stack([ac == x for x in range(self.n_actions)], dim=1).float()
 
         x = torch.cat((
-            ob.view(-1, self.n_pieces, self.board_width, self.board_height),
-            ac.view(-1, self.n_actions, 1, 1).repeat((1, 1, self.board_width, self.board_height))
+            ob.view(-1, self.n_pieces, self.board_height, self.board_width),
+            ac.view(-1, self.n_actions, 1, 1).repeat((1, 1, self.board_height, self.board_width))
         ), dim=1)
 
         x = F.relu(self.conv_start1(x))
         x = self.conv_start2(x)
-        #x, _ = x.max(dim=1, keepdim=True)
         x = F.relu(x)
 
         next_ob_logits = F.relu(self.conv_ob1(x))
@@ -74,8 +74,19 @@ class DreamWorld(nn.Module):
             self.cuda()
 
     def guide_dist(self, ob, ac):
+        network = pyro.random_module('dream_world', self.network, {
+            'network.conv_ob2.weight': dist.Normal(
+                loc=pyro.param('network.conv_ob2.weight.loc', torch.randn((8, 20, 1, 1)).cuda()),
+                scale=F.softplus(pyro.param('network.conv_ob2.weight.scale', torch.randn((8, 20, 1, 1)).cuda()))
+            ),
+            'network.conv_ob2.bias': dist.Normal(
+                loc=pyro.param('network.conv_ob2.bias.loc', torch.randn((8,)).cuda()),
+                scale=F.softplus(pyro.param('network.conv_ob2.bias.scale', torch.randn((8,)).cuda()))
+            )
+        })
+
         # network is only called in guide
-        next_ob_logits, reward_logits, game_over_logits = self.network(ob, ac)
+        next_ob_logits, reward_logits, game_over_logits = network()(ob, ac)
 
         # approximating distribution
         next_ob_logits = dist.Normal(
@@ -96,9 +107,22 @@ class DreamWorld(nn.Module):
         return next_ob_logits, reward_logits, game_over_logits
 
     def model(self, ob, ac, next_ob, reward, game_over):
-        pyro.module('dream_world', self)
 
         # priors
+        pyro.random_module('dream_world', self.network, prior={
+            'network.conv_ob2.weight': dist.Normal(
+                loc=torch.zeros((8, 20, 1, 1)),
+                scale=0.1*torch.ones((8, 20, 1, 1))
+            ),
+            'network.conv_ob2.bias': dist.Normal(
+                loc=torch.zeros((8,)),
+                scale=0.1*torch.ones((8,))
+            )
+        })
+
+        # for name in pyro.get_param_store().get_all_param_names():
+        #     print("{}: {}".format(name, pyro.param(name).data.shape))
+
         next_ob_logits = pyro.sample('next_ob_logits', dist.Normal(
             loc=torch.zeros(ob.shape + (4,), dtype=torch.float32).cuda(),
             scale=10*torch.ones(ob.shape + (4,), dtype=torch.float32).cuda()
@@ -120,8 +144,6 @@ class DreamWorld(nn.Module):
         pyro.sample('game_over', CustomCategorical(logits=game_over_logits).independent(), obs=game_over)
 
     def guide(self, ob, ac, next_ob, reward, game_over):
-        pyro.module('dream_world', self)
-
         # network is only called in guide
         next_ob_logits, reward_logits, game_over_logits = self.guide_dist(ob, ac)
 
@@ -139,19 +161,20 @@ class DreamWorld(nn.Module):
         game_over = CustomCategorical(logits=game_over_logits).sample()
         return next_ob, reward, game_over
 
-    def model_uncertainty(self, ob, ac, n_samples=100):
+    def model_uncertainty(self, ob, ac, n_dists=100, n_samples=10):
         # alternative f-divergences https://en.wikipedia.org/wiki/F-divergence
-        guide_dist = self.guide_dist(ob, ac)
         n_obs = ob.shape[0]
         kl = torch.zeros(n_obs).cuda()
-        for guide in guide_dist:
-            probs = dist.Categorical(logits=guide.sample((n_samples,))).probs
-            index = torch.meshgrid((torch.arange(n_samples), torch.arange(n_samples)))
-            probs_p = probs[index[0]]
-            probs_q = probs[index[1]]
-            kl_point = probs_q*torch.log(probs_q/(probs_p + 1e-6))
-            kl += kl_point.sum(-1).view(n_samples*n_samples, n_obs, -1).mean(0).sum(1)
-        return kl
+        for _ in range(n_dists):
+            guide_dist = self.guide_dist(ob, ac)
+            for guide in guide_dist: # next_ob, reward, game_over
+                probs = dist.Categorical(logits=guide.sample((n_samples,))).probs
+                index = torch.meshgrid((torch.arange(n_samples), torch.arange(n_samples)))
+                probs_p = probs[index[0]]
+                probs_q = probs[index[1]]
+                kl_point = probs_q*torch.log(probs_q/(probs_p + 1e-6))
+                kl += kl_point.sum(-1).view(n_samples*n_samples, n_obs, -1).mean(0).sum(1)
+        return kl/n_dists
 
 class DreamGame():
     def __init__(self, dream, ob, memory=None):

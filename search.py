@@ -3,7 +3,7 @@ import numpy as np
 import torch
 
 class QLearning:
-    def __init__(self, dream, ob, ac, next_ob, game_over, n_samples=10):
+    def __init__(self, dream, ob, ac, next_ob, game_over, n_dists=100, n_samples=10):
         n_actions = 4
 
         # Q-learning of model uncertainty
@@ -28,7 +28,7 @@ class QLearning:
 
         # Propagate uncertainty values backwards to get the discounted sum
         learning_rate = 0.45
-        discount_factor = 0.9
+        discount_factor = 0.99
         value_kl = kl
         for _ in range(1000):
             connection_value = value_kl[index]
