@@ -86,9 +86,10 @@ for _ in range(100):
     # human_game.play()
 
     # Simulate new moves
+    n_dream_moves = 1
     ob, _, next_ob, _, game_over = (x.cuda() for x in ds[:])
     n_actions = 4
-    for _ in range(1):
+    for _ in range(n_dream_moves):
         next_ob = next_ob[game_over == 0]
         ob = torch.cat((ob, next_ob.float()), dim=0)
         ob = torch.stack(tuple({str(x): x for x in ob}.values()), dim=0) # remove duplicates
@@ -101,7 +102,7 @@ for _ in range(100):
 
         # optimization: save in a dict and do not recalculate stuff
 
-    q_learning = search.QLearning(dream, ob, ac, next_ob, game_over, n_dists=100, n_samples=10)
+    q_learning = search.QLearning(dream, ob, ac, next_ob, game_over, n_samples=10)
 
     board, board_value_kl, board_kl = q_learning.directions()
     print('board')
@@ -137,6 +138,3 @@ for _ in range(100):
         else:
             previous_ob = ob
             ob = next_ob
-
-
-

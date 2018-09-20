@@ -3,7 +3,7 @@ import numpy as np
 import torch
 
 class QLearning:
-    def __init__(self, dream, ob, ac, next_ob, game_over, n_dists=100, n_samples=10):
+    def __init__(self, dream, ob, ac, next_ob, game_over, n_samples=10):
         n_actions = 4
 
         # Q-learning of model uncertainty

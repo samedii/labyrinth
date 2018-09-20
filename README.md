@@ -50,3 +50,7 @@ https://github.com/uber/pyro/blob/dev/examples/bayesian_regression.py
 
 Use autoguide instead and remove uncertainty of final loc, scale
 
+Clean up search and sampling
+
+Why is KL nan when dreaming up lots of moves?
+

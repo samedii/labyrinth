@@ -15,7 +15,7 @@ class DeterministicMemory:
     observations = {}
 
     def hash(self, ob, action):
-        return (
+        return ( # hash("{ob}{action}")
             'ob' + str(ob) +
             'action' + str(action)
         )
