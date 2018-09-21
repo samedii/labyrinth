@@ -17,11 +17,11 @@ class Network(nn.Module):
         self.board_width = 4
 
         channels = 16
-        self.conv_start1 = nn.Conv2d(self.n_pieces + self.n_actions, 32, kernel_size=3, stride=1, padding=1)
+        self.conv_start1 = nn.Conv2d(self.n_pieces + self.n_actions - 1, 32, kernel_size=3, stride=1, padding=1)
         self.conv_start2 = nn.Conv2d(32, channels, kernel_size=1, stride=1, padding=0)
 
         self.conv_ob1 = nn.Conv2d(channels, 16, kernel_size=1, stride=1, padding=0)
-        self.conv_ob2 = nn.Conv2d(16 + self.n_pieces, self.n_pieces, kernel_size=1, stride=1, padding=0)
+        self.conv_ob2 = nn.Conv2d(16 + self.n_pieces - 1, self.n_pieces, kernel_size=1, stride=1, padding=0)
 
         self.conv_reward = nn.Conv2d(channels, 8, kernel_size=1, stride=1, padding=0)
         self.fc_reward = nn.Linear(8*self.board_width*self.board_height, 2)
@@ -31,11 +31,11 @@ class Network(nn.Module):
 
     def forward(self, ob, ac):
         n_obs = ob.shape[0]
-        ob = torch.stack([ob == x for x in range(self.n_pieces)], dim=1).float()
+        ob = torch.stack([ob == x for x in range(1, self.n_pieces)], dim=1).float()
         ac = torch.stack([ac == x for x in range(self.n_actions)], dim=1).float()
 
         x = torch.cat((
-            ob.view(-1, self.n_pieces, self.board_height, self.board_width),
+            ob.view(-1, self.n_pieces - 1, self.board_height, self.board_width),
             ac.view(-1, self.n_actions, 1, 1).repeat((1, 1, self.board_height, self.board_width))
         ), dim=1)
 
@@ -62,35 +62,40 @@ class CustomCategorical(dist.Categorical):
         return super().log_prob(x, *args, **kwargs)*self.sample_weight
 
 class DreamWorld(nn.Module):
-
     def __init__(self, cuda=False):
         super(DreamWorld, self).__init__()
 
         self.network = Network()
 
-        # self.guide = pyro.contrib.autoguide.AutoDiagonalNormal(self.model)
-
         if cuda:
             self.cuda()
 
-    def model(self, ob, ac, next_ob, reward, game_over):
+        self.names_and_sizes = [
+            (name[len('network.'):], tensor.shape)
+            for name, tensor in self.named_parameters()
+            if name in ['network.conv_start2.weight', 'network.conv_start2.bias']
+        ]
 
-        # priors
-        network_dist = pyro.random_module('dream_world', self.network, prior={
-            'conv_ob2.weight': dist.Normal(
-                loc=torch.zeros((8, 20, 1, 1)).cuda(),
-                scale=0.1*torch.ones((8, 20, 1, 1)).cuda()
-            ).independent(),
-            'conv_ob2.bias': dist.Normal(
-                loc=torch.zeros((8,)).cuda(),
-                scale=0.1*torch.ones((8,)).cuda()
-            ).independent()
-        })
+        self.prior_dist = {
+                name: dist.Normal(
+                    loc=torch.zeros(size).cuda(),
+                    scale=10.0*torch.ones(size).cuda()
+                ).independent()
+                for name, size in self.names_and_sizes
+            }
+
+        # self.guide_dist = {
+        #     name: dist.Normal(
+        #         loc=pyro.param('{}.{}'.format(name, 'loc'), torch.randn(size).cuda()),
+        #         scale=F.softplus(pyro.param('{}.{}'.format(name, 'scale'), 0.01*torch.randn(size).cuda()))
+        #     ).independent()
+        #     for name, size in names_and_sizes
+        # }
+
+    def model(self, ob, ac, next_ob, reward, game_over):
+        network_dist = pyro.random_module('dream_world', self.network, self.prior_dist)
         network = network_dist()
         next_ob_logits, reward_logits, game_over_logits = network(ob, ac)
-
-        # for name in pyro.get_param_store().get_all_param_names():
-        #     print("{}: {}".format(name, pyro.param(name).data.shape))
 
         #with pyro.iarange('observe_data'): # needed?
         next_ob = pyro.sample('next_ob', CustomCategorical(logits=next_ob_logits).independent(), obs=next_ob)
@@ -98,17 +103,18 @@ class DreamWorld(nn.Module):
         game_over = pyro.sample('game_over', CustomCategorical(logits=game_over_logits).independent(), obs=game_over)
 
     def guide(self, ob, ac, next_ob, reward, game_over):
-        network_dist = pyro.random_module('dream_world', self.network, {
-            'conv_ob2.weight': dist.Normal(
-                loc=pyro.param('network.conv_ob2.weight.loc', torch.randn((8, 20, 1, 1)).cuda()),
-                scale=F.softplus(pyro.param('network.conv_ob2.weight.scale', torch.randn((8, 20, 1, 1)).cuda()))
-            ).independent(),
-            'conv_ob2.bias': dist.Normal(
-                loc=pyro.param('network.conv_ob2.bias.loc', torch.randn((8,)).cuda()),
-                scale=F.softplus(pyro.param('network.conv_ob2.bias.scale', torch.randn((8,)).cuda()))
+        guide_dist = {
+            name: dist.Normal(
+                loc=pyro.param('{}.{}'.format(name, 'loc'), 0.01*torch.randn(size).cuda()),
+                scale=F.softplus(pyro.param('{}.{}'.format(name, 'scale'), 0.01*torch.randn(size).cuda()))
             ).independent()
-        })
+            for name, size in self.names_and_sizes
+        }
+        network_dist = pyro.random_module('dream_world', self.network, guide_dist)
         return network_dist()
+
+    #def forward(self, ob, ac):
+    #    return self.sample(ob, ac)
 
     def sample(self, ob, ac):
         network_sample = self.guide(ob, ac, None, None, None)

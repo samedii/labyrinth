@@ -7,6 +7,7 @@ import pyro.contrib.autoguide
 import matplotlib.pyplot as plt
 
 pyro.enable_validation(True)
+#pyro.clear_param_store()
 
 import game
 import search
@@ -57,7 +58,7 @@ start_ob = torch.tensor(env.reset()).view(1, 4, 4)
 dream_game = network.DreamGame(dream, start_ob)
 human_game = game.HumanGame(dream_game)
 
-pyro.clear_param_store()
+
 for _ in range(100):
 
     # Learn

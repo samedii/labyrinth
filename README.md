@@ -54,3 +54,6 @@ Clean up search and sampling
 
 Why is KL nan when dreaming up lots of moves?
 
+Try approximate bayesian inference with noisy networks
+
+Error: Hellinger larger than 1?
