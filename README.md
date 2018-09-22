@@ -52,8 +52,16 @@ Use autoguide instead and remove uncertainty of final loc, scale
 
 Clean up search and sampling
 
-Why is KL nan when dreaming up lots of moves?
+Why is KL nan when dreaming up lots of moves? 0 prob
 
 Try approximate bayesian inference with noisy networks
 
-Error: Hellinger larger than 1?
+Error: Hellinger larger than 1? No, fixed
+
+Architecture independent of size and position
+
+Do bayesian approximation with noisy networks and choose hyperparameters that maximize KL on validation data?
+
+Wrap optimization and do optimization of hyperparameters on-the-fly? Can learn how to do this with evolution?
+
+

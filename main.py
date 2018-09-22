@@ -66,20 +66,24 @@ for _ in range(100):
         dream.model,
         dream.guide,
         optim=pyro.optim.Adam({'lr': 0.002, 'betas': (0.95, 0.999)}),
-        loss=pyro.infer.Trace_ELBO(num_particles=1)
+        loss=pyro.infer.TraceGraph_ELBO(num_particles=1)
     )
 
     ds = mem.dataset()
     print('dataset length: {}'.format(len(ds)))
-    data_loader = torch.utils.data.DataLoader(ds, batch_size=5, pin_memory=cuda)
+    data_loader = torch.utils.data.DataLoader(ds, batch_size=5, pin_memory=cuda) #, shuffle=True)
+
+    import time
 
     losses = []
     for epoch in range(1, 100+1):
+        # start = time.time()
         for i, batch in enumerate(data_loader):
+            start = time.time()
             loss = svi.step(*(x.cuda() for x in batch))
             losses.append(loss)
-        #print('epoch: {}, loss: {}'.format(epoch, loss))
-
+        # print('epoch: {}, loss: {}'.format(epoch, loss))
+        # print(time.time() - start)
     print('loss: {}'.format(loss))
     # plt.plot(losses)
     # plt.show()
@@ -103,13 +107,13 @@ for _ in range(100):
 
         # optimization: save in a dict and do not recalculate stuff
 
-    q_learning = search.QLearning(dream, ob, ac, next_ob, game_over, n_samples=10)
+    q_learning = search.QLearning(dream, ob, ac, next_ob, game_over, n_samples=50)
 
-    board, board_value_kl, board_kl = q_learning.directions()
+    board, board_value_uncertainty, board_uncertainty = q_learning.directions()
     print('board')
     print(board.cpu().numpy())
-    print(board_value_kl)
-    print(board_kl)
+    print(board_value_uncertainty)
+    print(board_uncertainty)
 
     # Alternative search methods:
     #   Breadth first search (can drop game overs with less value)

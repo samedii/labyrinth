@@ -73,8 +73,19 @@ class DreamWorld(nn.Module):
         self.names_and_sizes = [
             (name[len('network.'):], tensor.shape)
             for name, tensor in self.named_parameters()
-            if name in ['network.conv_start2.weight', 'network.conv_start2.bias']
+            if name in [
+                'network.conv_start2.weight',
+                'network.conv_start2.bias',
+                # 'network.conv_ob2.weight',
+                # 'network.conv_ob2.bias',
+                # 'network.fc_reward.weight',
+                # 'network.fc_reward.bias',
+                # 'network.fc_game_over.weight',
+                # 'network.fc_game_over.bias',
+            ]
         ]
+
+        print(self.names_and_sizes)
 
         self.prior_dist = {
                 name: dist.Normal(
@@ -84,23 +95,20 @@ class DreamWorld(nn.Module):
                 for name, size in self.names_and_sizes
             }
 
-        # self.guide_dist = {
-        #     name: dist.Normal(
-        #         loc=pyro.param('{}.{}'.format(name, 'loc'), torch.randn(size).cuda()),
-        #         scale=F.softplus(pyro.param('{}.{}'.format(name, 'scale'), 0.01*torch.randn(size).cuda()))
-        #     ).independent()
-        #     for name, size in names_and_sizes
-        # }
-
     def model(self, ob, ac, next_ob, reward, game_over):
         network_dist = pyro.random_module('dream_world', self.network, self.prior_dist)
         network = network_dist()
         next_ob_logits, reward_logits, game_over_logits = network(ob, ac)
 
-        #with pyro.iarange('observe_data'): # needed?
-        next_ob = pyro.sample('next_ob', CustomCategorical(logits=next_ob_logits).independent(), obs=next_ob)
-        reward = pyro.sample('reward', CustomCategorical(logits=reward_logits).independent(), obs=reward)
-        game_over = pyro.sample('game_over', CustomCategorical(logits=game_over_logits).independent(), obs=game_over)
+        next_ob_batch = pyro.iarange('next_ob_batch', next_ob.shape[0], dim=-3)
+        next_ob_height = pyro.iarange('next_ob_height', next_ob.shape[1], dim=-2)
+        next_ob_width = pyro.iarange('next_ob_width', next_ob.shape[2], dim=-1)
+        with next_ob_batch, next_ob_height, next_ob_width:
+            next_ob = pyro.sample('next_ob', CustomCategorical(logits=next_ob_logits), obs=next_ob)
+
+        with pyro.iarange('batch', len(ac)):
+            reward = pyro.sample('reward', CustomCategorical(logits=reward_logits), obs=reward)
+            game_over = pyro.sample('game_over', CustomCategorical(logits=game_over_logits), obs=game_over)
 
     def guide(self, ob, ac, next_ob, reward, game_over):
         guide_dist = {
@@ -127,10 +135,10 @@ class DreamWorld(nn.Module):
     def model_uncertainty(self, ob, ac, n_samples=100):
         # alternative f-divergences https://en.wikipedia.org/wiki/F-divergence
         n_obs = ob.shape[0]
-        hellinger = torch.zeros(n_obs).cuda()
         network_samples = [self.guide(ob, ac, None, None, None) for _ in range(n_samples)]
         network_outputs = [x(ob, ac) for x in network_samples]
 
+        hellinger = []
         for logits in zip(*network_outputs): # next_ob, reward, game_over
             logits = torch.stack(logits, dim=0)
             probs = dist.Categorical(logits=logits).probs
@@ -141,8 +149,8 @@ class DreamWorld(nn.Module):
             #kl_point[~torch.isfinite(kl_point)] = 100 # ugly hack, set to something large?
             #kl += kl_point.sum(-1).view(n_samples*n_samples, n_obs, -1).mean(0).sum(1)
             hellinger_point = (torch.sqrt(probs_p) - torch.sqrt(probs_q))**2
-            hellinger += torch.sqrt(hellinger_point.sum(-1)).view(n_samples*n_samples, n_obs, -1).mean(0).mean(1)/np.sqrt(2.0)
-        return hellinger
+            hellinger.append(torch.sqrt(hellinger_point.sum(-1)/2).view(n_samples*n_samples, n_obs, -1).mean(0).mean(1))
+        return torch.stack(hellinger, dim=1).mean(1) #*torch.tensor([0.6, 0.2, 0.2]).cuda()
 
 
 class DreamGame():
