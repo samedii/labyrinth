@@ -7,6 +7,10 @@ import pyro.distributions as dist
 import numpy as np
 import pyro.contrib.autoguide
 
+np.random.seed(seed=999)
+torch.manual_seed(999)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed_all(999)
 
 class Network(nn.Module):
     def __init__(self):
@@ -16,18 +20,20 @@ class Network(nn.Module):
         self.board_height = 4
         self.board_width = 4
 
-        channels = 16
-        self.conv_start1 = nn.Conv2d(self.n_pieces + self.n_actions - 1, 32, kernel_size=3, stride=1, padding=1)
-        self.conv_start2 = nn.Conv2d(32, channels, kernel_size=1, stride=1, padding=0)
+        self.conv_next_ob1 = nn.Conv2d(self.n_pieces + self.n_actions - 1, 32, kernel_size=3, stride=1, padding=1)
+        self.conv_next_ob2 = nn.Conv2d(32, 16, kernel_size=1, stride=1, padding=0)
+        self.conv_next_ob3 = nn.Conv2d(16 + self.n_pieces - 1, 16, kernel_size=1, stride=1, padding=0)
+        self.conv_next_ob4 = nn.Conv2d(16, self.n_pieces, kernel_size=1, stride=1, padding=0)
 
-        self.conv_ob1 = nn.Conv2d(channels, 16, kernel_size=1, stride=1, padding=0)
-        self.conv_ob2 = nn.Conv2d(16 + self.n_pieces - 1, self.n_pieces, kernel_size=1, stride=1, padding=0)
+        self.conv_reward1 = nn.Conv2d(self.n_pieces + self.n_actions - 1, 16, kernel_size=3, stride=1, padding=1)
+        self.conv_reward2 = nn.Conv2d(16, 8, kernel_size=1, stride=1, padding=0)
+        self.conv_reward3 = nn.Conv2d(8, 1, kernel_size=1, stride=1, padding=0)
+        self.fc_reward = nn.Linear(16, 2)
 
-        self.conv_reward = nn.Conv2d(channels, 8, kernel_size=1, stride=1, padding=0)
-        self.fc_reward = nn.Linear(8*self.board_width*self.board_height, 2)
-
-        self.conv_game_over = nn.Conv2d(channels, 8, kernel_size=1, stride=1, padding=0)
-        self.fc_game_over = nn.Linear(8*self.board_width*self.board_height, 2)
+        self.conv_game_over1 = nn.Conv2d(self.n_pieces + self.n_actions - 1, 16, kernel_size=3, stride=1, padding=1)
+        self.conv_game_over2 = nn.Conv2d(16, 8, kernel_size=1, stride=1, padding=0)
+        self.conv_game_over3 = nn.Conv2d(8, 1, kernel_size=1, stride=1, padding=0)
+        self.fc_game_over = nn.Linear(16, 2)
 
     def forward(self, ob, ac):
         n_obs = ob.shape[0]
@@ -39,20 +45,48 @@ class Network(nn.Module):
             ac.view(-1, self.n_actions, 1, 1).repeat((1, 1, self.board_height, self.board_width))
         ), dim=1)
 
-        x = F.relu(self.conv_start1(x))
-        x = self.conv_start2(x)
-        x = F.relu(x)
-
-        next_ob_logits = F.relu(self.conv_ob1(x))
+        next_ob_logits = F.relu(self.conv_next_ob1(x))
+        next_ob_logits = F.relu(self.conv_next_ob2(next_ob_logits))
         next_ob_logits = torch.cat((next_ob_logits, ob), dim=1)
-        next_ob_logits = self.conv_ob2(next_ob_logits)
+        next_ob_logits = F.relu(self.conv_next_ob3(next_ob_logits))
+        next_ob_logits = self.conv_next_ob4(next_ob_logits)
         next_ob_logits = next_ob_logits.permute(0, 2, 3, 1) # categorical wants the channel last
 
-        reward_logits = F.relu(self.conv_reward(x))
-        reward_logits = self.fc_reward(reward_logits.view(n_obs, -1))
+        reward_logits = F.relu(self.conv_reward1(x))
+        reward_logits = F.relu(self.conv_reward2(reward_logits))
+        reward_logits = self.conv_reward3(reward_logits)
+        reward_logits = reward_logits.view(n_obs, -1)
+        reward_logits, _ = reward_logits.sort()
+        reward_logits = self.fc_reward(reward_logits)
 
-        game_over_logits = F.relu(self.conv_game_over(x))
-        game_over_logits = self.fc_game_over(game_over_logits.view(n_obs, -1))
+        game_over_logits = F.relu(self.conv_game_over1(x))
+        game_over_logits = F.relu(self.conv_game_over2(game_over_logits))
+        game_over_logits = self.conv_game_over3(game_over_logits)
+
+        # 331
+        # game_over_logits, _ = game_over_logits[:, 1].view(n_obs, -1).max(dim=-1)
+        # game_over_logits = torch.stack((torch.zeros_like(game_over_logits), game_over_logits), dim=1)
+
+        # 0.1
+        game_over_logits = game_over_logits.view(n_obs, -1)
+        game_over_logits, _ = game_over_logits.sort()
+        game_over_logits = self.fc_game_over(game_over_logits)
+
+        # 277
+        # game_over_logits, _ = game_over_logits.view(n_obs, 2, -1).max(dim=-1)
+
+        # game_over_logits = game_over_logits.view(n_obs, 2, -1)
+        # game_over_logits = game_over_logits*F.log_softmax(game_over_logits[:, [1]], dim=-1)
+        # game_over_logits = game_over_logits.sum(-1)
+
+        # game_over_logits = F.log_softmax(game_over_logits, dim=-3)
+        # game_over_logits = game_over_logits[:, 0].sum(dim=(-2, -1))
+        # game_over_logits = game_over_logits - torch.log(1 - torch.exp(game_over_logits))
+        # game_over_logits = torch.stack((game_over_logits, torch.zeros_like(game_over_logits)), dim=1)
+
+        # game_over_logits = game_over_logits.view(n_obs, 2, -1)
+        # game_over_index = game_over_logits[:, 1].argmax(dim=-1)
+        # game_over_logits = game_over_logits[np.arange(n_obs), :, game_over_index]
 
         return next_ob_logits, reward_logits, game_over_logits
 
@@ -74,14 +108,12 @@ class DreamWorld(nn.Module):
             (name[len('network.'):], tensor.shape)
             for name, tensor in self.named_parameters()
             if name in [
-                'network.conv_start2.weight',
-                'network.conv_start2.bias',
-                # 'network.conv_ob2.weight',
-                # 'network.conv_ob2.bias',
-                # 'network.fc_reward.weight',
-                # 'network.fc_reward.bias',
-                # 'network.fc_game_over.weight',
-                # 'network.fc_game_over.bias',
+                'network.conv_next_ob3.weight',
+                'network.conv_next_ob3.bias',
+                'network.conv_reward3.weight',
+                'network.conv_reward3.bias',
+                # 'network.conv_game_over3.weight',
+                # 'network.conv_game_over3.bias',
             ]
         ]
 

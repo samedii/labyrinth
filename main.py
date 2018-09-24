@@ -41,7 +41,7 @@ mem = memory.DeterministicMemory()
 
 # Gather some data through random actions
 ob = env.reset()
-for i in range(100):
+for i in range(1000):
     ac = np.random.choice(4)
     next_ob, reward, game_over = env.step(ac)
 
@@ -58,6 +58,7 @@ start_ob = torch.tensor(env.reset()).view(1, 4, 4)
 dream_game = network.DreamGame(dream, start_ob)
 human_game = game.HumanGame(dream_game)
 
+first_time_training = True
 
 for _ in range(100):
 
@@ -65,28 +66,32 @@ for _ in range(100):
     svi = pyro.infer.SVI(
         dream.model,
         dream.guide,
-        optim=pyro.optim.Adam({'lr': 0.002, 'betas': (0.95, 0.999)}),
+        optim=pyro.optim.Adam({'lr': 0.001, 'betas': (0.95, 0.999)}),
         loss=pyro.infer.TraceGraph_ELBO(num_particles=1)
     )
 
     ds = mem.dataset()
     print('dataset length: {}'.format(len(ds)))
-    data_loader = torch.utils.data.DataLoader(ds, batch_size=5, pin_memory=cuda) #, shuffle=True)
+    data_loader = torch.utils.data.DataLoader(ds, batch_size=5, pin_memory=cuda, shuffle=True)
 
     import time
 
     losses = []
-    for epoch in range(1, 100+1):
+    for epoch in range(1, 501 if first_time_training else 101):
         # start = time.time()
+        epoch_losses = []
         for i, batch in enumerate(data_loader):
             start = time.time()
             loss = svi.step(*(x.cuda() for x in batch))
             losses.append(loss)
+            epoch_losses.append(loss)
         # print('epoch: {}, loss: {}'.format(epoch, loss))
         # print(time.time() - start)
-    print('loss: {}'.format(loss))
+        print('epoch: {}, loss: {}'.format(epoch, np.sum(epoch_losses)/len(ds)))
     # plt.plot(losses)
     # plt.show()
+
+    first_time_training = False
 
     # human_game.play()
 

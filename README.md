@@ -64,4 +64,6 @@ Do bayesian approximation with noisy networks and choose hyperparameters that ma
 
 Wrap optimization and do optimization of hyperparameters on-the-fly? Can learn how to do this with evolution?
 
+TODO: rotation, mirror
 
+Problem: How to handle game over & reward better? It stops learning
